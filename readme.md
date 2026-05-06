@@ -77,15 +77,15 @@ KLTN/
 │     ├── 📂 Detector_train/             
 │       ├── yolov11m.ipynb                   # Final code training
 │       └── load-data-coco-ua-detrac.ipynb   # not important 
-│   ├── main.py
-│   ├── models
+│     ├── main.py
+│     ├── models
 │        ├── traffic_yolo_v11m
 │             ├── best.pt                # checkpoint yolov11m train on custom data
-│   ├── run_gui.py
+│     ├── run_gui.py
 │     ├── model.py
 │     ├── setup.py
 │     ├── track_and_detect.py
-│   └── src/
+│        └── src/
 ├── 📂 Dataset/                   # ⚠️ NOT INCLUDED IN GIT
 │
 ├── 📄 .gitignore                 # Git ignore rules
