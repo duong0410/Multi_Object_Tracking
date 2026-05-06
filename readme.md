@@ -1,4 +1,4 @@
-#  Multi-Object Tracking System - KLTN Project
+#  Multi-Object Tracking System
 
 Hệ thống theo dõi đa đối tượng (Multi-Object Tracking) sử dụng YOLO detector và ByteTrack tracker cho bài toán theo dõi phương tiện giao thông và người đi bộ.
 
