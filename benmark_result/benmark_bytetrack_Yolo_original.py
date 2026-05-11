@@ -228,18 +228,17 @@ class YOLOxDetector:
             result = self.model.load_state_dict(state_dict, strict=False)
             print(f"  Missing keys: {len(result.missing_keys)}")
             print(f"  Unexpected keys: {len(result.unexpected_keys)}")
-            
+
             self.model.to(self.device)
+            if self.device.type == 'cuda':
+                self.model.half()
             self.model.eval()
-            
-            print(f"✓ YOLOx model loaded successfully on {self.device}")
-            
         except Exception as e:
             print(f"❌ Error loading YOLOx checkpoint: {e}")
             import traceback
             traceback.print_exc()
             raise
-        
+
         # Test shape
         self.test_size = (800, 1440)  # MOT17 default size
         
@@ -422,8 +421,12 @@ class YOLOxDetector:
             print(f"    [DEBUG] Ratio: {ratio}")
         
         # Convert to tensor
-        img_tensor = torch.from_numpy(img_preprocessed).unsqueeze(0).float().to(self.device)
-        
+        img_tensor = torch.from_numpy(img_preprocessed).unsqueeze(0)
+        if self.device.type == 'cuda':
+            img_tensor = img_tensor.half()
+        else:
+            img_tensor = img_tensor.float()
+        img_tensor = img_tensor.to(self.device)
         # Inference - YOLOx model outputs raw predictions
         with torch.no_grad():
             outputs = self.model(img_tensor)
@@ -1005,14 +1008,22 @@ def iou_distance(atracks, btracks):
 
 def bbox_ious(atlbrs, btlbrs):
     """Compute IoU between two sets of boxes"""
-    ious = np.zeros((len(atlbrs), len(btlbrs)), dtype=np.float32)
-    if ious.size == 0:
-        return ious
-    
-    for i, atlbr in enumerate(atlbrs):
-        for j, btlbr in enumerate(btlbrs):
-            ious[i, j] = bbox_iou(atlbr, btlbr)
-    return ious
+    if len(atlbrs) == 0 or len(btlbrs) == 0:
+        return np.zeros((len(atlbrs), len(btlbrs)), dtype=np.float32)
+
+    atlbrs = np.asarray(atlbrs, dtype=np.float32)
+    btlbrs = np.asarray(btlbrs, dtype=np.float32)
+
+    tl = np.maximum(atlbrs[:, None, :2], btlbrs[None, :, :2])
+    br = np.minimum(atlbrs[:, None, 2:], btlbrs[None, :, 2:])
+    wh = np.clip(br - tl, a_min=0, a_max=None)
+    inter = wh[:, :, 0] * wh[:, :, 1]
+
+    area_a = (atlbrs[:, 2] - atlbrs[:, 0]) * (atlbrs[:, 3] - atlbrs[:, 1])
+    area_b = (btlbrs[:, 2] - btlbrs[:, 0]) * (btlbrs[:, 3] - btlbrs[:, 1])
+    union = area_a[:, None] + area_b[None, :] - inter
+    union = np.clip(union, a_min=1e-6, a_max=None)
+    return inter / union
 
 
 def bbox_iou(box1, box2):
