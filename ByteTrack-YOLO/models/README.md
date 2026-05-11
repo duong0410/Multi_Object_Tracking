@@ -4,7 +4,7 @@ Place your trained YOLO model files here.
 
 ## Expected Files
 
-- `yolo11s_traffic.pt` - Your trained YOLO11s model
+- `yolo11m_traffic.pt` - Your trained YOLO11m model
 
 ## Download Models
 
@@ -13,7 +13,7 @@ If you don't have a trained model, you can:
 1. **Use pre-trained YOLO models** from Ultralytics:
    ```bash
    # Will auto-download on first use
-   python -c "from ultralytics import YOLO; YOLO('yolo11s.pt')"
+   python -c "from ultralytics import YOLO; YOLO('yolo11m.pt')"
    ```
 
 2. **Train your own model** on traffic/vehicle dataset
@@ -24,9 +24,8 @@ If you don't have a trained model, you can:
 
 ```
 models/
-├── yolo11s_traffic.pt    # Your trained model
 ├── yolo11n.pt            # (optional) Nano model
-└── yolo11m.pt            # (optional) Medium model
+└── yolo11m.pt            #  Medium model
 ```
 
 ## Note
