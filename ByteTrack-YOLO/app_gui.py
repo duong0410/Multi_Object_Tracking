@@ -253,7 +253,7 @@ class ByteTrackGUI:
         ttk.Label(settings_frame, text="Model:", font=("Arial", 8, "bold")).grid(
             row=3, column=0, sticky=tk.W, pady=2)
         
-        self.model_path = r"D:\Learn\Year4\KLTN\Dataset\traffic_yolo_v11m_mixclass\best (8).pt"
+        self.model_path = r"D:\Learn\Year4\KLTN\ByteTrack-YOLO\models\traffic_yolo_v11m\best.pt"
         self.model_label = ttk.Label(settings_frame, text=Path(self.model_path).name, 
                                foreground="blue", font=("Arial", 7))
         self.model_label.grid(row=4, column=0, sticky=tk.W, pady=(0, 2))
@@ -333,7 +333,7 @@ class ByteTrackGUI:
                  font=("Arial", 9, "bold")).grid(row=22, column=0, sticky=tk.W, pady=(8, 3))
         
         self.enable_violation_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(settings_frame, text="✓ Enable violation check", 
+        ttk.Checkbutton(settings_frame, text="Enable violation check", 
                        variable=self.enable_violation_var).grid(
                        row=23, column=0, sticky=tk.W, pady=(1, 5))
         
@@ -802,6 +802,8 @@ class ByteTrackGUI:
                     del self.traffic_lanes[selected_lane_id]
                     if selected_lane_id in self.violation_detector.lanes:
                         del self.violation_detector.lanes[selected_lane_id]
+                    if len(self.violation_detector.lanes) == 0:
+                        self.violation_detector.persistent_violations.clear()
                     select_window.destroy()
                     messagebox.showinfo("Success", f"Lane {selected_lane_id} deleted!")
                     self.update_lane_info_display()
@@ -844,7 +846,7 @@ class ByteTrackGUI:
             self.lane_list_label.config(text="0 lanes configured", foreground="orange")
             self.lane_detail_label.config(text="")
         else:
-            self.lane_list_label.config(text=f"✓ {lane_count} lane(s) configured", foreground="green")
+            self.lane_list_label.config(text=f"{lane_count} lane(s) configured", foreground="green")
             lanes_detail = ""
             for lane_id, lane in sorted(self.traffic_lanes.items()):
                 vehicle_types = ", ".join([self.detector.class_names.get(cid, f"ID{cid}") 
@@ -896,177 +898,213 @@ class ByteTrackGUI:
         self.should_stop = True
     
     def process_video(self):
-        """Process video with ByteTrack (runs in separate thread)"""
-        try:
-            print("="*60)
-            print("Initializing YOLO11 Traffic detector...")
-            self.detector = YOLODetector(
-                model_path=self.model_path,
-                conf_threshold=self.det_conf_var.get(),
-                device=self.device_var.get(),
-                min_box_area=self.min_box_area_var.get(),
-                edge_margin=self.edge_margin_var.get()
-            )
-            
-            print("Initializing ByteTrack...")
-            self.tracker = BYTETracker(
-                track_buffer=self.track_buffer_var.get(),
-                min_hits=3
-            )
-            print("✓ ByteTrack initialized")
-            
-            print(f"Opening video: {Path(self.video_path).name}")
-            self.cap = cv2.VideoCapture(self.video_path)
-            
-            if not self.cap.isOpened():
-                print("❌ ERROR: Cannot open video file!")
-                return
-            
-            fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
-            self.video_fps = fps if fps > 0 else 30
-            self.actual_fps = self.video_fps  # khởi tạo bằng video_fps trước khi có số thực
-            print(f"Video info: {width}x{height} @ {fps} FPS, {total_frames} frames")
-            
-            writer = None
-            if self.save_output_var.get() and self.output_path:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                writer = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
-                print(f"Output will be saved to: {Path(self.output_path).name}")
-            
-            print("="*60)
-            print("Processing started...")
-            print(f"{'Frame':<10} {'Detections':<12} {'Tracks':<10} {'FPS':<10}")
-            print("-"*50)
-            
-            frame_id = 0
-            fps_list = []
-            
-            while not self.should_stop:
-                ret, frame = self.cap.read()
-                if not ret:
-                    break
+            """Process video with ByteTrack (runs in separate thread)"""
+            try:
+                print("="*60)
+                print("Initializing YOLO11 Traffic detector...")
+                self.detector = YOLODetector(
+                    model_path=self.model_path,
+                    conf_threshold=self.det_conf_var.get(),
+                    device=self.device_var.get(),
+                    min_box_area=self.min_box_area_var.get(),
+                    edge_margin=self.edge_margin_var.get()
+                )
                 
-                frame_id += 1
-                start_time = time.time()
+                print("Initializing ByteTrack...")
+                self.tracker = BYTETracker(
+                    track_buffer=self.track_buffer_var.get(),
+                    min_hits=3
+                )
+                print("ByteTrack initialized")
                 
-                detections = self.detector.detect(frame)
-                img_shape = (height, width)
-                online_tracks = self.tracker.update(detections, img_shape)
+                print(f"Opening video: {Path(self.video_path).name}")
+                self.cap = cv2.VideoCapture(self.video_path)
                 
-                # Ensure track has violation_type attribute
-                for track in online_tracks:
-                    if not hasattr(track, 'violation_type'):
-                        track.violation_type = ViolationType.NONE
+                if not self.cap.isOpened():
+                    print("ERROR: Cannot open video file!")
+                    return
                 
-                # Check violations (if enabled and if there are lanes or zones configured)
-                violations_enabled = self.enable_violation_var.get()
-                has_zones_lanes = (len(self.traffic_lanes) > 0 or len(self.no_parking_zones) > 0)
+                fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 
-                if violations_enabled and has_zones_lanes:
-                    violations = self.violation_detector.detect_violations(online_tracks, frame_id)
+                self.video_fps = fps if fps > 0 else 30
+                self.actual_fps = self.video_fps
+                print(f"Video info: {width}x{height} @ {fps} FPS, {total_frames} frames")
+
+                target_width = 1280
+                target_height = 720
+                if width > target_width or height > target_height:
+                    scale = min(target_width / width, target_height / height)
+                    proc_width = int(width * scale)
+                    proc_height = int(height * scale)
+                    print(f"Resizing frames for detector to: {proc_width}x{proc_height}")
+                else:
+                    proc_width = width
+                    proc_height = height
+                    print("No downscale needed; using original frame size for detection")
+                
+                writer = None
+                if self.save_output_var.get() and self.output_path:
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    writer = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
+                    print(f"Output will be saved to: {Path(self.output_path).name}")
+                
+                self.violation_detector.persistent_violations.clear()
+                self.violation_detector.no_parking_state.clear()
+                
+                print("="*60)
+                print("Processing started...")
+                print(f"{'Frame':<8} {'detect':>8} {'track':>8} {'violation':>10} {'draw':>8} {'puttext':>9} {'queue':>7} {'total':>8} {'FPS':>7}")
+                print("-"*80)
+                
+                frame_id = 0
+                fps_list = []
+                
+                while not self.should_stop:
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        break
+                    
+                    frame_id += 1
+                    t0 = time.time()
+                    
+                    # ── 1. Detect ──────────────────────────────────────────────
+                    frame_proc = frame
+                    if proc_width != width or proc_height != height:
+                        frame_proc = cv2.resize(frame, (proc_width, proc_height))
+
+                    detections = self.detector.detect(frame_proc)
+                    if detections.size > 0 and (proc_width != width or proc_height != height):
+                        scale_x = width / proc_width
+                        scale_y = height / proc_height
+                        detections[:, [0, 2]] *= scale_x
+                        detections[:, [1, 3]] *= scale_y
+                    t1 = time.time()
+
+                    # ── 2. Track ───────────────────────────────────────────────
+                    img_shape = (height, width)
+                    online_tracks = self.tracker.update(detections, img_shape)
+                    
                     for track in online_tracks:
-                        if track.track_id in violations:
-                            violation_types_list = violations[track.track_id]  # List of ViolationType
-                            
-                            # Filter out NO_PARKING violations for person class
-                            class_name = self.detector.get_class_name(track.class_id) if track.class_id is not None else "unknown"
-                            if class_name.lower() == "person":
-                                # Person không bị NO_PARKING, nhưng có thể vẫn vi phạm loại khác
-                                violation_types_list = [v for v in violation_types_list if v != ViolationType.NO_PARKING]
-                            
-                            track.violation_types = violation_types_list  # Store list
-                            # Primary violation for backward compat (dùng first type)
-                            track.violation_type = violation_types_list[0] if violation_types_list else ViolationType.NONE
-                        else:
+                        if not hasattr(track, 'violation_type'):
+                            track.violation_type = ViolationType.NONE
+                    t2 = time.time()
+
+                    # ── 3. Violation ───────────────────────────────────────────
+                    violations_enabled = self.enable_violation_var.get()
+                    has_zones_lanes = (len(self.traffic_lanes) > 0 or len(self.no_parking_zones) > 0)
+                    
+                    if violations_enabled and has_zones_lanes:
+                        violations = self.violation_detector.detect_violations(online_tracks, frame_id)
+                        for track in online_tracks:
+                            if track.track_id in violations:
+                                violation_types_list = violations[track.track_id]
+                                class_name = self.detector.get_class_name(track.class_id) if track.class_id is not None else "unknown"
+                                if class_name.lower() == "person":
+                                    violation_types_list = [v for v in violation_types_list if v != ViolationType.NO_PARKING]
+                                track.violation_types = violation_types_list
+                                track.violation_type = violation_types_list[0] if violation_types_list else ViolationType.NONE
+                            else:
+                                track.violation_types = []
+                                track.violation_type = ViolationType.NONE
+                    else:
+                        for track in online_tracks:
                             track.violation_types = []
                             track.violation_type = ViolationType.NONE
-                else:
-                    # No violations to check
-                    for track in online_tracks:
-                        track.violation_types = []
-                        track.violation_type = ViolationType.NONE
+                    t3 = time.time()
+
+                    # ── 4. Draw tracks ─────────────────────────────────────────
+                    frame_vis = self.draw_tracks(frame, online_tracks, detections)
+                    t4 = time.time()
+
+                    # ── 5. Put text info ───────────────────────────────────────
+                    elapsed_so_far = t4 - t0
+                    fps_val_so_far = 1.0 / elapsed_so_far if elapsed_so_far > 0 else 0
+                    info_text = [
+                        f"Frame: {frame_id}/{total_frames}",
+                        f"Detections: {len(detections)}",
+                        f"Tracks: {len(online_tracks)}",
+                        f"FPS: {fps_val_so_far:.1f}"
+                    ]
+                    y_offset = 30
+                    for text in info_text:
+                        cv2.putText(frame_vis, text, (10, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        y_offset += 30
+                    t5 = time.time()
+
+                    # ── 6. Queue + UI update ───────────────────────────────────
+                    try:
+                        self.frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    self.frame_queue.put_nowait(frame_vis)
+
+                    if frame_id % 5 == 0:
+                        progress = (frame_id / total_frames) * 100
+                        self.progress_var.set(progress)
+                        self.status_label.config(
+                            text=f"Processing: Frame {frame_id}/{total_frames} ({progress:.1f}%) - FPS: {fps_val_so_far:.1f}")
+                    t6 = time.time()
+
+                    # ── FPS tracking ───────────────────────────────────────────
+                    elapsed = t6 - t0
+                    fps_val = 1.0 / elapsed if elapsed > 0 else 0
+                    fps_list.append(fps_val)
+                    n = min(len(fps_list), 10)
+                    self.actual_fps = sum(fps_list[-n:]) / n
+
+                    # ── Log mỗi 30 frame ───────────────────────────────────────
+                    if frame_id % 30 == 0 or frame_id == 1:
+                        detect_ms    = (t1 - t0) * 1000
+                        track_ms     = (t2 - t1) * 1000
+                        violation_ms = (t3 - t2) * 1000
+                        draw_ms      = (t4 - t3) * 1000
+                        puttext_ms   = (t5 - t4) * 1000
+                        queue_ms     = (t6 - t5) * 1000
+                        total_ms     = elapsed * 1000
+                        print(f"{frame_id:<8} {detect_ms:>7.1f}ms {track_ms:>7.1f}ms {violation_ms:>9.1f}ms {draw_ms:>7.1f}ms {puttext_ms:>8.1f}ms {queue_ms:>6.1f}ms {total_ms:>7.1f}ms {fps_val:>6.1f}")
+
+                    if writer:
+                        writer.write(frame_vis)
                 
-                elapsed = time.time() - start_time
-                fps_val = 1.0 / elapsed if elapsed > 0 else 0
-                fps_list.append(fps_val)
-                
-                # Cập nhật actual_fps bằng moving average 10 frame
-                # để display interval không nhảy loạn theo từng frame
-                n = min(len(fps_list), 10)
-                self.actual_fps = sum(fps_list[-n:]) / n
-                
-                if frame_id % 30 == 0 or frame_id == 1:
-                    print(f"{frame_id:<10} {len(detections):<12} {len(online_tracks):<10} {fps_val:<10.2f}")
-                
-                frame_vis = self.draw_tracks(frame, online_tracks, detections)
-                
-                info_text = [
-                    f"Frame: {frame_id}/{total_frames}",
-                    f"Detections: {len(detections)}",
-                    f"Tracks: {len(online_tracks)}",
-                    f"FPS: {fps_val:.1f}"
-                ]
-                
-                y_offset = 30
-                for text in info_text:
-                    cv2.putText(frame_vis, text, (10, y_offset),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    y_offset += 30
-                
-                progress = (frame_id / total_frames) * 100
-                self.progress_var.set(progress)
-                self.status_label.config(
-                    text=f"Processing: Frame {frame_id}/{total_frames} ({progress:.1f}%) - FPS: {fps_val:.1f}")
-                
-                # Xả frame cũ (nếu display chưa kịp lấy), đẩy frame mới nhất vào
-                try:
-                    self.frame_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                self.frame_queue.put_nowait(frame_vis)
-                
+                self.cap.release()
                 if writer:
-                    writer.write(frame_vis)
-            
-            self.cap.release()
-            if writer:
-                writer.release()
-            
-            print("\n" + "="*60)
-            if self.should_stop:
-                print(" Processing stopped by user")
-            else:
-                print(" Processing completed!")
-            print(f"  Total frames processed: {frame_id}")
-            if len(fps_list) > 0:
-                print(f"  Average FPS: {np.mean(fps_list):.2f}")
-            print(f"  Total tracks created: {STrack.track_id_count}")
-            print("="*60)
-            
-            self.status_label.config(text="✅ Processing completed!")
-            self.progress_var.set(100)
-            
-            if not self.should_stop:
-                messagebox.showinfo("Success", 
-                                   f"Video processing completed!\n\n"
-                                   f"Frames processed: {frame_id}\n"
-                                   f"Average FPS: {np.mean(fps_list):.1f}\n"
-                                   f"Total tracks: {STrack.track_id_count}")
-            
-        except Exception as e:
-            print(f" ERROR: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
-            messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
-            
-        finally:
-            self.is_processing = False
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
+                    writer.release()
+                
+                print("\n" + "="*60)
+                if self.should_stop:
+                    print(" Processing stopped by user")
+                else:
+                    print(" Processing completed!")
+                print(f"  Total frames processed: {frame_id}")
+                if len(fps_list) > 0:
+                    print(f"  Average FPS: {np.mean(fps_list):.2f}")
+                print(f"  Total tracks created: {STrack.track_id_count}")
+                print("="*60)
+                
+                self.status_label.config(text=" Processing completed!")
+                self.progress_var.set(100)
+                
+                if not self.should_stop:
+                    messagebox.showinfo("Success", 
+                                    f"Video processing completed!\n\n"
+                                    f"Frames processed: {frame_id}\n"
+                                    f"Average FPS: {np.mean(fps_list):.1f}\n"
+                                    f"Total tracks: {STrack.track_id_count}")
+                
+            except Exception as e:
+                print(f" ERROR: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
+                
+            finally:
+                self.is_processing = False
+                self.start_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
     
     def draw_tracks(self, frame, tracks, detections):
         """Draw tracking results on frame"""
