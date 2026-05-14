@@ -230,14 +230,6 @@ class ViolationDetector:
 
                 state['last_center'] = (cx, cy)
 
-                print(
-                    f"[NO_PARKING] track={track_id} zone={zone_id} "
-                    f"movement={movement:.2f} "
-                    f"window_len={len(state['movement_window'])} "
-                    f"is_flagged={state['is_flagged']} "
-                    f"accum={state['moving_accumulator']:.1f}/{zone.clear_distance_threshold}"
-                )
-
             # Ghi nhận vi phạm nếu đang flagged
             if state['is_flagged']:
                 if ViolationType.NO_PARKING not in violations_list:

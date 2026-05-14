@@ -24,9 +24,17 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
+from collections import Counter
+from datetime import timedelta
+import csv
 
 import cv2
 import numpy as np
+
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
 
 try:
     from PIL import Image, ImageTk
@@ -47,6 +55,132 @@ from src.tracker import (
     ViolationType,
     NoParkingZone,
 )
+from src.utils.bbox import bbox_iou
+
+
+class TrackLogger:
+    """Collects per-track lifecycle data and exports Excel/CSV logs."""
+
+    def __init__(self):
+        self.entries = {}
+        self.fps = 30
+
+    @staticmethod
+    def format_timestamp(seconds: float) -> str:
+        td = timedelta(seconds=float(seconds))
+        total_seconds = int(td.total_seconds())
+        millis = int((td.total_seconds() - total_seconds) * 1000)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+    def reset(self):
+        self.entries = {}
+        self.fps = 30
+
+    def update_frame(self, tracks: List, frame_id: int, fps: int, detector):
+        self.fps = fps
+        for track in tracks:
+            if not track.is_activated:
+                continue
+
+            track_id = track.track_id
+            class_name = detector.get_class_name(track.class_id) if track.class_id is not None else "unknown"
+            violations = set(getattr(track, "violation_types", []))
+
+            entry = self.entries.get(track_id)
+            if entry is None:
+                entry = {
+                    "track_id": track_id,
+                    "class_id": track.class_id,
+                    "class_name": class_name,
+                    "first_frame": track.start_frame,
+                    "first_time_s": track.start_frame / fps,
+                    "last_frame": frame_id,
+                    "last_time_s": frame_id / fps,
+                    "violations": violations,
+                }
+                self.entries[track_id] = entry
+            else:
+                entry["class_name"] = class_name or entry["class_name"]
+                entry["class_id"] = track.class_id if entry["class_id"] is None else entry["class_id"]
+                entry["first_frame"] = min(entry["first_frame"], track.start_frame)
+                entry["first_time_s"] = entry["first_frame"] / fps
+                entry["last_frame"] = max(entry["last_frame"], frame_id)
+                entry["last_time_s"] = entry["last_frame"] / fps
+                entry["violations"].update(violations)
+
+    def build_report(self):
+        rows = []
+        for entry in sorted(self.entries.values(), key=lambda e: e["track_id"]):
+            duration_frames = max(0, entry["last_frame"] - entry["first_frame"] + 1)
+            duration_seconds = max(0.0, entry["last_time_s"] - entry["first_time_s"])
+            violation_names = [v.name for v in sorted(entry["violations"], key=lambda x: x.value)]
+            rows.append({
+                "Track ID": entry["track_id"],
+                "Class": entry["class_name"],
+                "Class ID": entry["class_id"],
+                "First Frame": entry["first_frame"],
+                "First Timestamp": self.format_timestamp(entry["first_time_s"]),
+                "Last Frame": entry["last_frame"],
+                "Last Timestamp": self.format_timestamp(entry["last_time_s"]),
+                "Duration (frames)": duration_frames,
+                "Duration (seconds)": round(duration_seconds, 3),
+                "Violations": ", ".join(violation_names) if violation_names else "None",
+            })
+
+        counts_by_class = Counter(entry["class_name"] for entry in self.entries.values())
+        counts_by_violation = Counter(
+            v.name for entry in self.entries.values() for v in entry["violations"]
+        )
+
+        summary_rows = [
+            {"Metric": "Total distinct tracks", "Value": len(self.entries)},
+        ]
+        summary_rows.extend(
+            {"Metric": f"Total {class_name}", "Value": count}
+            for class_name, count in sorted(counts_by_class.items())
+        )
+        if counts_by_violation:
+            summary_rows.append({"Metric": "" , "Value": ""})
+            summary_rows.append({"Metric": "Violation counts", "Value": ""})
+            summary_rows.extend(
+                {"Metric": violation_name.replace("_", " "), "Value": count}
+                for violation_name, count in sorted(counts_by_violation.items())
+            )
+
+        return rows, summary_rows
+
+    def save(self, base_path: str):
+        if not self.entries:
+            return None
+
+        base_path = Path(base_path)
+        output_dir = base_path.parent if base_path.exists() else base_path.parent
+        log_stem = f"{base_path.stem}_tracking_log"
+        excel_path = output_dir / f"{log_stem}.xlsx"
+        csv_path = output_dir / f"{log_stem}.csv"
+
+        rows, summary_rows = self.build_report()
+
+        if pd is not None:
+            try:
+                df_tracks = pd.DataFrame(rows)
+                df_summary = pd.DataFrame(summary_rows)
+                with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+                    df_tracks.to_excel(writer, index=False, sheet_name="tracks")
+                    df_summary.to_excel(writer, index=False, sheet_name="summary")
+                return excel_path
+            except Exception:
+                pass
+
+        # Fallback to CSV if Excel writer is unavailable
+        with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+        return csv_path
 
 
 # ============================================================================
@@ -211,12 +345,14 @@ class ByteTrackGUI:
         self.violation_detector = ViolationDetector()
         self.traffic_lanes = {}  # {lane_id: TrafficLane}
         self.no_parking_zones = {}  # {zone_id: NoParkingZone}
+        self.track_logger = TrackLogger()
         
         # video_fps: FPS gốc của video (giới hạn dưới cho display)
         # actual_fps: FPS hệ thống xử lý được realtime (giới hạn trên cho display)
         # display_fps = min(video_fps, actual_fps)
         self.video_fps = 30
         self.actual_fps = 30
+        self.person_vehicle_iou_threshold = 0.2
 
         # Queue size=1: chỉ giữ frame mới nhất, không bao giờ block
         self.frame_queue = queue.Queue(maxsize=1)
@@ -224,6 +360,39 @@ class ByteTrackGUI:
         # Create GUI
         self.create_widgets()
         
+    def filter_person_riding_vehicle(self, detections: np.ndarray, iou_threshold: float = 0.2) -> np.ndarray:
+        """Keep actual pedestrians and remove riders sitting on vehicles."""
+        if detections.size == 0:
+            return detections
+
+        vehicle_indices = []
+        person_indices = []
+        for idx, det in enumerate(detections):
+            class_id = int(det[5])
+            class_name = self.detector.get_class_name(class_id).lower()
+            if class_name == "person":
+                person_indices.append(idx)
+            elif any(vehicle in class_name for vehicle in ("car", "bus", "truck", "bicycle", "motor")):
+                vehicle_indices.append(idx)
+
+        if not person_indices or not vehicle_indices:
+            return detections
+
+        keep_indices = [i for i in range(len(detections)) if i not in person_indices]
+        for p_idx in person_indices:
+            person_box = detections[p_idx, :4]
+            is_rider = False
+            for v_idx in vehicle_indices:
+                vehicle_box = detections[v_idx, :4]
+                if bbox_iou(person_box, vehicle_box) >= iou_threshold:
+                    is_rider = True
+                    break
+            if not is_rider:
+                keep_indices.append(p_idx)
+
+        keep_indices.sort()
+        return detections[keep_indices]
+
     def create_widgets(self):
         """Create all GUI widgets"""
         
@@ -953,6 +1122,7 @@ class ByteTrackGUI:
                 
                 self.violation_detector.persistent_violations.clear()
                 self.violation_detector.no_parking_state.clear()
+                self.track_logger.reset()
                 
                 print("="*60)
                 print("Processing started...")
@@ -981,6 +1151,11 @@ class ByteTrackGUI:
                         scale_y = height / proc_height
                         detections[:, [0, 2]] *= scale_x
                         detections[:, [1, 3]] *= scale_y
+
+                    detections = self.filter_person_riding_vehicle(
+                        detections,
+                        iou_threshold=self.person_vehicle_iou_threshold
+                    )
                     t1 = time.time()
 
                     # ── 2. Track ───────────────────────────────────────────────
@@ -1014,6 +1189,13 @@ class ByteTrackGUI:
                             track.violation_types = []
                             track.violation_type = ViolationType.NONE
                     t3 = time.time()
+
+                    self.track_logger.update_frame(
+                        online_tracks,
+                        frame_id,
+                        self.video_fps,
+                        self.detector,
+                    )
 
                     # ── 4. Draw tracks ─────────────────────────────────────────
                     frame_vis = self.draw_tracks(frame, online_tracks, detections)
@@ -1073,6 +1255,10 @@ class ByteTrackGUI:
                 self.cap.release()
                 if writer:
                     writer.release()
+
+                log_path = self.track_logger.save(self.output_path if self.output_path else self.video_path)
+                if log_path is not None:
+                    print(f"Track log saved to: {log_path}")
                 
                 print("\n" + "="*60)
                 if self.should_stop:
