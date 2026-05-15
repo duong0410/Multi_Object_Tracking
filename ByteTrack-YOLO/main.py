@@ -16,26 +16,6 @@ Features:
 """
 
 if __name__ == '__main__':
-    # Import after showing welcome message
-    import tkinter as tk
-    from tkinter import ttk
-    from app_gui import ByteTrackGUI
-    
-    # Create and run GUI
-    root = tk.Tk()
-    
-    # Set style
-    style = ttk.Style()
-    try:
-        style.theme_use('clam')
-    except:
-        pass  # Use default theme if clam not available
-    
-    app = ByteTrackGUI(root)
-    
-    print("=" * 60)
-    print("ByteTrack GUI Started")
-    print("=" * 60)
-    
-    root.mainloop()
+    from app_gui import main
+    main()
 

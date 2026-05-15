@@ -42,11 +42,8 @@ except ImportError:
     print("Error: PIL not installed. Run: pip install pillow")
     sys.exit(1)
 
-# Add src to path for modular imports
-sys.path.insert(0, str(Path(__file__).parent))
-
-from src.detector import YOLODetector
-from src.tracker import (
+from bytetrack_yolo.detector import YOLODetector
+from bytetrack_yolo.tracker import (
     BYTETracker,
     STrack,
     TrackState,
@@ -55,7 +52,7 @@ from src.tracker import (
     ViolationType,
     NoParkingZone,
 )
-from src.utils.bbox import bbox_iou
+from bytetrack_yolo.utils.bbox import bbox_iou
 
 
 class TrackLogger:
@@ -541,7 +538,7 @@ class ByteTrackGUI:
         
         ttk.Label(settings_frame, text="Timeout (frames):", 
                  font=("Arial", 7)).grid(row=29, column=0, sticky=tk.W, pady=(1, 1))
-        self.no_park_frames_var = tk.IntVar(value=45)
+        self.no_park_frames_var = tk.IntVar(value=30)
         no_park_spinbox = ttk.Spinbox(settings_frame, from_=10, to=300,
                                       textvariable=self.no_park_frames_var, width=12)
         no_park_spinbox.grid(row=30, column=0, sticky=(tk.W, tk.E), pady=(0, 2))
